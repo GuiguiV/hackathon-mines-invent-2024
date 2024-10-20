@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
+from torchvision.transforms import Resize, InterpolationMode
 
 
 from baseline.collate import pad_collate
@@ -60,88 +61,71 @@ def print_mean_iou(targets: torch.Tensor, preds: torch.Tensor) -> None:
 
 
 def train_model(
-    data_folder: Path,
-    nb_classes: int,
-    input_channels: int,
-    num_epochs: int = 10,
-    batch_size: int = 4,
+    model,
+    dl,
+    num_epochs: int = 1,
     learning_rate: float = 1e-3,
-    device: str = "cpu",
-    verbose: bool = False,
-) -> SimpleSegmentationModel:
+):
     """
-    Training pipeline.
+    Modified training pipeline with some data augmentation.
     """
-    # Create data loader
-    dataset = BaselineDataset(data_folder)
-    dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, collate_fn=pad_collate, shuffle=True
-    )
+    device = torch.device( 'cuda' if torch.cuda.is_available() else 'cpu' )
+    print(device)
+    resize_up = Resize((256,256),InterpolationMode.NEAREST_EXACT)
+    resize_down = Resize((128,128),InterpolationMode.NEAREST_EXACT)
 
+
+    
     # Initialize the model, loss function, and optimizer
-    model = SimpleSegmentationModel(input_channels, nb_classes)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     # Move the model to the appropriate device (GPU if available)
-    device = torch.device(device)
     model.to(device)
 
     # Training loop
     for epoch in range(num_epochs):
         model.train()  # Set the model to training mode
         running_loss = 0.0
+        
 
-        for i, (inputs, targets) in tqdm(enumerate(dataloader), total=len(dataloader)):
+        for i, (inputs_with_t, targets) in enumerate(dl):
+            
+            inputs = torch.median(inputs_with_t["S2"],dim=1)[0]
+            
             # Move data to device
-            inputs["S2"] = inputs["S2"].to(device)  # Satellite data
+            inputs = inputs.to(device)  # Satellite data
             targets = targets.to(device)
 
             # Zero the parameter gradients
             optimizer.zero_grad()
+            
 
-            # Forward pass
-            outputs = model(inputs["S2"][:, 10, :, :, :])  # only use the 10th image
+            for n_rot_90 in range(1,4):
+                #data augmentation by 90 deg rotation
+                augm_batch = torch.rot90(inputs,k=n_rot_90,dims=(-2,-1))
+                augm_batch_targets = torch.rot90(targets,k=n_rot_90,dims=(-2,-1))
+                inputs = torch.cat((inputs,augm_batch))
+                targets = torch.cat((targets,augm_batch_targets))
+                
+
+            outputs = resize_down(model(resize_up(inputs)))
+            targets = targets.flatten()
+            outputs = outputs.permute(0,2,3,1).flatten(end_dim=-2)
+
+            
 
             # Loss computation
-            loss = criterion(outputs, targets)
+            loss = criterion(outputs,targets )
 
             # Backward pass and optimization
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
 
-            # Get the predicted class per pixel (B, H, W)
-            preds = torch.argmax(outputs, dim=1)
-
-            # Move data from GPU/Metal to CPU
-            targets = targets.cpu().numpy().flatten()
-            preds = preds.cpu().numpy().flatten()
-
-            if verbose:
-                # Print IOU for debugging
-                print_iou_per_class(targets, preds, nb_classes)
-                print_mean_iou(targets, preds)
-
         # Print the loss for this epoch
-        epoch_loss = running_loss / len(dataloader)
+        epoch_loss = running_loss/(i+1)
         print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}")
 
     print("Training complete.")
     return model
-
-
-if __name__ == "__main__":
-    # Example usage:
-    model = train_model(
-        data_folder=Path(
-            "/Users/louis.stefanuto.c/Documents/pastis-benchmark-mines2024/DATA/TRAIN/"
-        ),
-        nb_classes=20,
-        input_channels=10,
-        num_epochs=100,
-        batch_size=32,
-        learning_rate=1e-3,
-        device="mps",
-        verbose=True,
-    )
