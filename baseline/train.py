@@ -7,10 +7,7 @@ from tqdm import tqdm
 from torchvision.transforms import Resize, InterpolationMode
 
 
-from baseline.collate import pad_collate
-from baseline.dataset import BaselineDataset
-from baseline.model import SimpleSegmentationModel
-
+from baseline.ndvi import remove_low_ndvi_images,calculate_ndvi_means
 
 def print_iou_per_class(
     targets: torch.Tensor,
@@ -64,6 +61,7 @@ def train_model(
     model,
     dl,
     num_epochs: int = 1,
+    filter_ndvi: bool = False,
     learning_rate: float = 1e-3,
 ):
     """
@@ -91,8 +89,14 @@ def train_model(
 
         for i, (inputs_with_t, targets) in enumerate(dl):
             
+            if filter_ndvi:
+                for ii in range(len(inputs_with_t)):
+                    calculate_ndvi_means(inputs_with_t,bid=ii)
+                    inputs_with_t = remove_low_ndvi_images(inputs_with_t,bid=ii)
+                    
+                    
             inputs = torch.median(inputs_with_t["S2"],dim=1)[0]
-            
+
             # Move data to device
             inputs = inputs.to(device)  # Satellite data
             targets = targets.to(device)
