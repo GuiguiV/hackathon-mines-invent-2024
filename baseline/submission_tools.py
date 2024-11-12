@@ -1,9 +1,10 @@
 import numpy as np
-
+"""This module provides tools to make the Kaggle pipeline work
+"""
 
 def masks_to_str(predictions: np.ndarray) -> list[str]:
     """
-    Convert the
+    Convert the masks to string format
 
     Args:
         predictions (np.ndarray): predictions as a 3D batch (B, H, W)
